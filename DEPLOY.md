@@ -396,6 +396,96 @@ docker compose up -d
 
 ---
 
+## 升级 sub2api
+
+镜像 `weishaw/sub2api:latest` 不定期更新（修 bug、加模型支持、改 schema 等）。所有应用数据 / 数据库 / Redis 数据都是本地目录映射，更新流程会**保留全部数据**。
+
+### 标准升级流程
+
+```bash
+cd ~/sub2api-deploy
+
+# 1. 备份数据库（强烈建议；新版本如果 schema 迁移失败可以回滚）
+docker exec sub2api-postgres pg_dump -U sub2api sub2api \
+  | gzip > ../sub2api-db-$(date +%Y%m%d-%H%M%S).sql.gz
+
+# 2. 拉新镜像（只更新 sub2api，不动 postgres/redis）
+docker compose pull sub2api
+
+# 3. 重建容器（用新镜像 + 原 .env / 原数据卷）
+docker compose up -d sub2api
+
+# 4. 看启动日志确认迁移成功
+docker compose logs -f sub2api
+```
+
+启动日志关注以下关键行（按这个顺序出现）：
+
+- `Database connection successful`
+- `Database initialized successfully` 或 `Database migration completed`
+- `Server started on 0.0.0.0:8080`
+
+如果出现 `panic` / `fatal` / `migration failed` 立即按下面的回滚流程恢复。
+
+更新完跑一次冒烟测试：
+
+```bash
+bash ~/sub2api-deploy/smoke.sh
+```
+
+### 重要细节
+
+**只更 sub2api 不动 db**：`docker compose pull sub2api` 只拉这一个镜像，避免无意义重启数据库。要全部检查更新就 `docker compose pull`。
+
+**`docker-compose.override.yml` 自动保留**：代理注入的环境变量（HTTP_PROXY / extra_hosts）会自动跟新镜像合并，不用手动重做。
+
+**Web UI 用户不会被踢**：`JWT_SECRET` / `TOTP_ENCRYPTION_KEY` 来自 `.env`，固定不变，老 token 仍然有效。
+
+**清理旧镜像**：`docker compose pull` 拉新镜像后旧的还占空间：
+
+```bash
+docker image prune -f
+```
+
+### 回滚
+
+如果新版本启动失败、行为异常或迁移出问题：
+
+```bash
+cd ~/sub2api-deploy
+
+# 1. 找到上一个能用的版本号（看 docker hub）
+# https://hub.docker.com/r/weishaw/sub2api/tags
+# 例如 v1.5.0
+
+# 2. 改 docker-compose.yml 把镜像 tag 钉死（默认是 latest）
+sed -i 's|image: weishaw/sub2api:latest|image: weishaw/sub2api:v1.5.0|' docker-compose.yml
+
+# 3. 拉回老镜像
+docker compose pull sub2api
+docker compose up -d sub2api
+
+# 4. 如果数据库 schema 已经被新版本改写，新老不兼容时还要恢复 db
+# 先停 sub2api 避免新连接污染
+docker compose stop sub2api
+gunzip -c ../sub2api-db-XXXXXX.sql.gz | \
+  docker exec -i sub2api-postgres psql -U sub2api -d sub2api
+docker compose start sub2api
+```
+
+完成后再 `bash smoke.sh` 验证。回滚成功后建议改回 `image: weishaw/sub2api:latest` 等下次想再尝试升级时使用。
+
+### 关于 postgres / redis 镜像
+
+> **不建议主动升级 db**：除非有安全 CVE。
+>
+> - **patch / minor 版本**（如 18.1 → 18.2）：一般可以直接换镜像 tag，pull 后 up -d 即可
+> - **major 版本**（如 17 → 18）：必须做 `pg_dumpall` 全量导出 + 新版本 `psql` 导入，**不能直接换 tag**，否则数据目录格式不兼容会启动失败
+>
+> 当前固定为 `postgres:18-alpine` / `redis:8-alpine`，问题不大。
+
+---
+
 ## 已知局限和坑
 
 1. **mihomo fallback 不支持延迟阈值**：只能"整组 down 了才切下一组"，无法配"美国延迟 > 500ms 切日本"。如果美国 url-test 内全部节点都很慢但 TCP 还能连，fallback 不会触发。如需，要装第三方插件或前置一个高延迟检测脚本。
