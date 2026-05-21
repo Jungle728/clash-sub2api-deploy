@@ -1,0 +1,37 @@
+# 部署敏感凭证 / 数据 / 临时文件
+*.env
+*.env.local
+.env
+.env.*
+!.env.example
+!*.env.example
+
+# sub2api 数据目录
+data/
+postgres_data/
+redis_data/
+
+# clash 实际运行目录（含订阅 / 凭证 / 节点池缓存）
+clashctl/
+providers/
+
+# 实际生效的（含真实凭证的）配置
+mixin.yaml
+docker-compose.override.yml
+!mixin.yaml.example
+!docker-compose.override.yml.example
+
+# 编辑器/系统垃圾
+.DS_Store
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# 日志
+*.log
+logs/
+
+# 临时
+/tmp/
