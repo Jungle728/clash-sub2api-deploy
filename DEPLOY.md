@@ -150,6 +150,13 @@ services:
       - https_proxy=http://sub2api:${PROXY_PASS}@host.docker.internal:7890
       - no_proxy=localhost,127.0.0.1,postgres,redis,host.docker.internal
       - UPDATE_PROXY_URL=http://sub2api:${PROXY_PASS}@host.docker.internal:7890
+    # 覆盖镜像内的 healthcheck（绕过代理）
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-Y", "off", "-T", "5", "-O", "/dev/null", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 EOF
 ```
 
@@ -579,6 +586,8 @@ SERVER_PORT=65432
 
 6. **订阅 1 的"信息节点"会污染分组**：第一订阅的 proxies 列表里有"剩余流量"、"套餐到期"等占位项目（无效 proxy），mihomo 的 url-test 会把它们也算进去测试失败。当前 filter 用 `日本|美国` 等地理关键字过滤，避开它们；但如果机场升级或换机场，命名风格变了，要重新校准 filter 正则。
 
+7. **容器走代理时镜像内置的 wget healthcheck 会被骗**：`HTTP_PROXY` 环境变量对 busybox wget 的 `NO_PROXY=localhost` 不生效（应该生效但实际不工作），导致 `wget http://localhost:8080/health` 也被发去 mihomo 代理，回 502 → 容器被 docker 标记 unhealthy（实际服务完全正常）。修法：在 `docker-compose.override.yml` 中用 `healthcheck:` 字段覆盖原 healthcheck，命令里加 `-Y off` 强制 wget 不走代理。已写在附录 B 模板里。
+
 ---
 
 ## 附录 A: 完整 mixin.yaml
@@ -799,6 +808,14 @@ services:
       - https_proxy=http://sub2api:REPLACE_WITH_PROXY_PASS@host.docker.internal:7890
       - no_proxy=localhost,127.0.0.1,postgres,redis,host.docker.internal
       - UPDATE_PROXY_URL=http://sub2api:REPLACE_WITH_PROXY_PASS@host.docker.internal:7890
+    # 覆盖镜像内的 healthcheck：busybox wget 即使设了 NO_PROXY，对 localhost 仍会走 HTTP_PROXY，
+    # 导致 healthcheck 经 mihomo 代理后回 502（实际服务正常）。用 -Y off 强制 wget 不走代理。
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-Y", "off", "-T", "5", "-O", "/dev/null", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 ```
 
 ---

@@ -12,3 +12,12 @@ services:
       - https_proxy=http://sub2api:REPLACE_WITH_PROXY_PASS@host.docker.internal:7890
       - no_proxy=localhost,127.0.0.1,postgres,redis,host.docker.internal
       - UPDATE_PROXY_URL=http://sub2api:REPLACE_WITH_PROXY_PASS@host.docker.internal:7890
+    # 覆盖镜像内的 healthcheck：busybox wget 即使设了 NO_PROXY，对 localhost 仍会走 HTTP_PROXY
+    # 导致 healthcheck 经 mihomo 代理后回 502，容器被标记 unhealthy（实际服务正常）。
+    # 用 -Y off 强制 wget 不走代理。
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-Y", "off", "-T", "5", "-O", "/dev/null", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
