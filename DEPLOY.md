@@ -486,6 +486,85 @@ docker compose start sub2api
 
 ---
 
+## 修改对外端口
+
+默认 `8080` 是常见 Web 服务端口，扫描器最爱光顾。建议换成高位非常用端口（49152-65535 内随便选，例如 `65432`）减少被探测概率，同时配合云服务商防火墙只放行你需要的端口。
+
+### 步骤
+
+```bash
+cd ~/sub2api-deploy
+
+# 1. 改 .env 里的 SERVER_PORT
+sed -i 's/^SERVER_PORT=.*/SERVER_PORT=65432/' .env
+grep -E '^SERVER_PORT' .env
+
+# 2. 重建容器（compose 检测到端口映射变化会自动 recreate sub2api）
+docker compose up -d sub2api
+
+# 3. 等几秒后验证
+sleep 5
+ss -tunl | grep 65432            # 应看到 0.0.0.0:65432 监听
+ss -tunl | grep 8080 || echo "old 8080 已释放"
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:65432/health
+```
+
+健康端点返回 200 即完成。
+
+### 端口架构说明
+
+```
+宿主 0.0.0.0:65432  ──→  容器 sub2api:8080
+       (映射)              (容器内固定 8080)
+```
+
+容器内部进程 / 健康检查仍然是 `8080`，**只改宿主映射**。所以：
+
+- `docker-compose.yml` 不动（用 `${SERVER_PORT:-8080}` 模板从 `.env` 读）
+- `docker-compose.override.yml` 不动（只管代理注入，没碰端口）
+- `mixin.yaml` 不动（mihomo 配置和 sub2api 端口无关）
+- 容器内健康检查不动（始终探测自己的 8080）
+
+### 不要忘记
+
+**1. 客户端连接 URL 同步更新**
+
+所有调用方（Mac、Codex CLI、Claude Code、Cursor 等）原来连 `http://<server>:8080`，必须改成新端口。
+
+**2. 防火墙 / 安全组规则**
+
+- 云服务商安全组：放行 65432，关闭 8080
+- 服务器自己的 ufw / firewalld：同上
+- 注意 mihomo 控制台 9090 端口也要单独考虑（它和 sub2api 端口独立）
+
+**3. smoke.sh 已自动适配**
+
+`smoke.sh` 会自动从 `.env` 读取 `SERVER_PORT`，改完端口直接 `bash smoke.sh` 即可。
+
+**4. 反向代理 / 域名场景**
+
+如果你后面用 Caddy / Nginx 反代加 HTTPS，对外暴露 80/443，sub2api 端口可以**只监听 127.0.0.1**（更安全），改 `.env`：
+
+```bash
+BIND_HOST=127.0.0.1
+SERVER_PORT=65432
+```
+
+外部完全访问不到，只有反代能转发。
+
+### 端口选择建议
+
+| 端口范围 | 是否推荐 | 备注 |
+|---|---|---|
+| 8080 / 8888 / 3000 / 5000 | ❌ 常见 Web 端口 | 扫描器优先目标 |
+| 22 / 80 / 443 | ❌ 系统标准端口 | 别动 |
+| 1024-49151 | ⚠️ 可用但要避开常见服务 | 比如 5432=postgres、6379=redis、3306=mysql |
+| **49152-65535** | ✅ 推荐 | IANA 定义的"动态/私有"端口段，几乎无标准服务占用 |
+
+也可以用 `shuf -i 49152-65535 -n 1` 随机生成一个。
+
+---
+
 ## 已知局限和坑
 
 1. **mihomo fallback 不支持延迟阈值**：只能"整组 down 了才切下一组"，无法配"美国延迟 > 500ms 切日本"。如果美国 url-test 内全部节点都很慢但 TCP 还能连，fallback 不会触发。如需，要装第三方插件或前置一个高延迟检测脚本。

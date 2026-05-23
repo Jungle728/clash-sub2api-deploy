@@ -3,7 +3,9 @@
 # 用法：bash smoke.sh
 set -e
 PROXY_PASS="REPLACE_WITH_PROXY_PASS"   # 必须与 mixin.yaml authentication 一致
-SUB2API_URL="http://127.0.0.1:8080"
+# 自动从 .env 读 SERVER_PORT，缺省 8080
+SUB2API_PORT=$(grep -E '^SERVER_PORT=' "$(dirname "$0")/.env" 2>/dev/null | cut -d= -f2)
+SUB2API_URL="http://127.0.0.1:${SUB2API_PORT:-8080}"
 
 echo "[1/5] mihomo 监听 *:7890..."
 ss -tunl | grep -q '\*:7890' && echo "  OK *:7890 (allow-lan)" || { echo "  FAIL: not *:7890, 检查 mixin allow-lan"; exit 1; }
@@ -24,7 +26,7 @@ done
 
 echo "[5/5] sub2api 健康..."
 c=$(curl -s --max-time 5 -o /dev/null -w "%{http_code}" $SUB2API_URL/health)
-[[ "$c" == "200" ]] && echo "  OK /health 200" || { echo "  FAIL /health $c"; exit 1; }
+[[ "$c" == "200" ]] && echo "  OK $SUB2API_URL/health 200" || { echo "  FAIL $SUB2API_URL/health $c"; exit 1; }
 
 echo
 echo "✅ 部署正常"
