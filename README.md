@@ -1,6 +1,6 @@
 # clash-sub2api-deploy
 
-在一台 Linux 服务器上用 **mihomo (clash)** 提供出海代理，再用 **sub2api** 把自己的 ChatGPT Plus / Claude Max 账号转成统一 OpenAI / Anthropic 兼容的 API 接口。
+在一台 Linux 服务器上用 **mihomo (clash)** 提供出海代理，再用 **sub2api** 把自己的 ChatGPT Plus / Claude Max 账号转成统一 OpenAI / Anthropic 兼容的 API 接口。仓库还附带 [`ai-tools/`](./ai-tools/) 客户端配置生成器，可一键把网关接到 codex CLI / Claude Code / opencode。
 
 适合场景：
 
@@ -46,6 +46,7 @@
 | `check-direct.sh` | **部署前**测试服务器能否直连 OpenAI/Anthropic API，决定走完整 / 简化部署 |
 | `.env.example` | sub2api 部署脚本生成的环境变量模板（凭证全部用占位符） |
 | `mixin.yaml.example` | **v1 遗留**：基于宿主 mihomo 安装的 mixin 配置（v2 已不用，仅供参考） |
+| `ai-tools/` | 客户端侧工具：探测 sub2api 网关协议并生成 codex / Claude Code / opencode 配置（详见 [`ai-tools/README.md`](./ai-tools/README.md)） |
 
 ## 快速使用
 
@@ -85,6 +86,20 @@ docker compose logs sub2api 2>&1 | grep -i 'admin password'
 ```
 
 **新机器迁移（保留旧数据）**：从旧机器 `tar` 备份 `~/sub2api-deploy/` 目录传过去，解压后直接 `docker compose up -d` 即可。详见 DEPLOY.md「迁移到新机器」节。
+
+## 客户端配置（ai-tools）
+
+部署完 sub2api 后，可以用 `ai-tools/gen_configs.py` 一键探测网关支持的协议（OpenAI Chat / Responses / Anthropic Messages）并生成对应客户端配置：
+
+```bash
+# 预览到当前目录
+python3 ai-tools/gen_configs.py --base-url http://YOUR-HOST:65432 --api-key sk-xxx
+
+# 写入标准路径（~/.codex、~/.claude、~/.config/opencode）
+python3 ai-tools/gen_configs.py --base-url http://YOUR-HOST:65432 --api-key sk-xxx --install
+```
+
+完整选项见 [`ai-tools/README.md`](./ai-tools/README.md)。
 
 ## 关键设计要点
 
