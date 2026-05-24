@@ -44,18 +44,68 @@
 
 ---
 
-## 必需信息（新部署需要准备）
+## 准备清单（从零部署前）
 
-| 项 | 来源 / 占位符 | 说明 |
+### 你必须自己准备的
+
+| 项 | 说明 | 怎么获取 |
 |---|---|---|
-| 订阅 URL | `https://YOUR-PROVIDER/...` | 机场提供，作为 mihomo proxy-provider；要求支持 clash 格式 |
-| 代理认证密码 | `openssl rand -hex 12` | mihomo 7890 的 Basic Auth |
+| 一台 Linux 服务器 | x86_64，2 核 / 4GB / 20GB 磁盘起步；境外节点（Azure / 美西 / 日本 IDC 等）最佳 | 任何云厂商；推荐 4GB 内存以上避免 OOM |
+| sudo 权限 | 装 docker 需要 | 服务器管理员账号 |
+| 一个机场订阅（clash 格式） | sub2api 容器要靠它出海调 OpenAI / Anthropic API | 任何支持 clash 订阅的机场。**测试链接是否可用**：<br>`curl -A "clash-verge/v2.4.0" -I "<你的订阅URL>"` 应返回 `content-type: text/yaml` |
+| OpenAI / Anthropic 账号 | sub2api 是中转，自己不带账号；你要有 ChatGPT Plus / Claude Max / Anthropic API 等账号才有用 | 自己注册 |
+| 服务器对外开放的端口 | 默认 65432（推荐改高位端口）；客户端调 sub2api 要能连上 | 云厂商安全组 + 服务器 firewall 放行 |
+
+### 仓库 / 脚本会自动生成的（不用提前准备）
+
+| 项 | 默认值 / 生成方式 | 用途 |
+|---|---|---|
+| 代理认证密码 | `openssl rand -hex 12`（部署时执行） | mihomo 7890 的 Basic Auth |
 | POSTGRES_PASSWORD | `openssl rand -hex 32` | sub2api 数据库密码 |
-| JWT_SECRET | `openssl rand -hex 32` | 用户登录 token 加密；丢了所有用户被踢 |
-| TOTP_ENCRYPTION_KEY | `openssl rand -hex 32` | 用户 2FA 加密；丢了所有 2FA 失效 |
-| sub2api 镜像 | `weishaw/sub2api:latest` | docker hub |
-| mihomo 镜像 | `metacubex/mihomo:latest` | docker hub |
-| sub2api 官方 compose | `https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/docker-compose.local.yml` | 步骤 2 直接 curl 下载，与上游同步 |
+| JWT_SECRET | `openssl rand -hex 32` | 用户登录 token 加密 |
+| TOTP_ENCRYPTION_KEY | `openssl rand -hex 32` | 用户 2FA 加密 |
+| admin 一次性密码 | sub2api 首次启动日志输出 | Web UI 管理员登录（账号 `admin@sub2api.local`）|
+
+### 镜像和上游资源（部署时自动拉）
+
+| 项 | 来源 |
+|---|---|
+| sub2api 镜像 | `weishaw/sub2api:latest`（docker hub） |
+| mihomo 镜像 | `metacubex/mihomo:latest`（docker hub） |
+| postgres 镜像 | `postgres:18-alpine`（docker hub） |
+| redis 镜像 | `redis:8-alpine`（docker hub） |
+| sub2api 官方 docker-compose | `https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/docker-compose.local.yml` |
+| zashboard mihomo 控制台 | `https://github.com/Zephyruso/zashboard/releases/latest/download/dist.zip`（mihomo 容器自动下载） |
+
+### 可选（视场景）
+
+| 项 | 用途 | 需要时再准备 |
+|---|---|---|
+| 域名 | 想用 HTTPS 而不是裸 IP 暴露 | DNS 解析到服务器 + Caddy/Nginx 反代 |
+| 邮箱（SMTP） | sub2api 给用户发邮件通知 | Web UI 系统设置里配 |
+| 备用机场订阅 | 防一个机场挂掉时切换 | 可加多个 proxy-provider |
+
+### 部署前自检
+
+新机器上跑这几条，全 OK 才开始部署：
+
+```bash
+# 1. 确认是支持的发行版
+. /etc/os-release && echo "$ID $VERSION_ID"   # 期望：ubuntu 22.04+ / 24.04 等
+
+# 2. 确认架构
+uname -m   # 期望：x86_64
+
+# 3. 确认订阅 URL 可达（用 mihomo 模拟 UA）
+curl -A "clash-verge/v2.4.0" -I --max-time 10 "<你的订阅URL>" | head -5
+# 期望：HTTP/x 200 + content-type: text/yaml
+
+# 4. 确认目标端口空闲
+ss -tunl | grep -E ':65432' || echo "✅ 65432 空闲"
+
+# 5. 确认能访问 docker hub（镜像拉取）
+curl -s --max-time 5 -o /dev/null -w "%{http_code}\n" https://registry-1.docker.io/v2/   # 期望非 000
+```
 
 ---
 
