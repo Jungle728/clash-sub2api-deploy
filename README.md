@@ -6,27 +6,33 @@
 
 - 自己有 ChatGPT Plus / Claude Pro/Max 账号，想用编程 SDK / Cline / Cursor 等以 API 方式调用
 - 服务器在境内或在被 OpenAI/Anthropic 拒绝的 IDC 区域，需要先经过代理出海
-- 想要 AI 流量优先走美国节点、其他流量走日本节点；美国不可用时自动 fallback
+- AI 流量优先走美国节点，自动 fallback 日本，节点不可达时切换无感
 
-## 架构
+## 架构（v2 全容器化）
 
 ```
-客户端 → :8080 (sub2api 容器)
-          │
-          └─ 出站调用 OpenAI/Anthropic API
-                 │  (HTTP_PROXY env)
-                 ▼
-              host.docker.internal:7890
-                 │  (mihomo mixed-port, 带 Basic Auth)
-                 │
-                 │  rule 命中 *.openai.com / *.anthropic.com / claude.ai 等
-                 ▼
-              🤖 AI 优选 (fallback)
-                 ├─ 1st: 🇺🇸 美国节点 (url-test, 多订阅合并)
-                 ├─ 2nd: 🇯🇵 日本节点 (url-test, 多订阅合并)
-                 └─ 3rd: DIRECT (兜底)
-                 ▼
-              真实出站节点 → OpenAI / Anthropic
+┌─────────────────────────────────────────────────┐
+│ 宿主机                                          │
+│   ✗ 不装 mihomo / clashctl                      │
+│   ✗ 不依赖 systemd / nohup                      │
+│                                                 │
+│  ┌──────────── docker compose ───────────────┐ │
+│  │                                            │ │
+│  │ sub2api-mihomo  ←─┐                        │ │
+│  │   (mihomo:latest) │                        │ │
+│  │   :7890 (内部)    │ HTTP_PROXY            │ │
+│  │   :9090 (内部)    │ mihomo:7890          │ │
+│  │                   │                        │ │
+│  │ sub2api ──────────┘                        │ │
+│  │   :8080 → 宿主 :65432 (可改)               │ │
+│  │   ↓                                        │ │
+│  │ sub2api-postgres                           │ │
+│  │ sub2api-redis                              │ │
+│  └────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────┘
+                       ↓
+              proxy-providers (订阅，自动每小时刷新)
+              JP / US 节点 → AI API (OpenAI/Anthropic)
 ```
 
 ## 仓库内容
@@ -34,26 +40,29 @@
 | 文件 | 用途 |
 |---|---|
 | `DEPLOY.md` | **完整部署手册**，从一台空机器到 sub2api 可对外服务的所有步骤 |
-| `mixin.yaml.example` | 路由策略 / 双订阅合并 / fallback 的 clash mixin 配置模板 |
-| `docker-compose.override.yml.example` | 让 sub2api 容器走宿主 clash 代理的 compose override |
+| `mihomo/config.yaml.example` | mihomo 容器的完整配置（路由 / 分组 / fallback / 订阅） |
+| `docker-compose.override.yml.example` | mihomo 服务定义 + sub2api 走代理的 env 注入 |
 | `smoke.sh` | 部署后端到端冒烟测试，5 步全自动验证 |
 | `.env.example` | sub2api 部署脚本生成的环境变量模板（凭证全部用占位符） |
+| `mixin.yaml.example` | **v1 遗留**：基于宿主 mihomo 安装的 mixin 配置（v2 已不用，仅供参考） |
 
 ## 快速使用
 
 新机器上想复刻这套环境：
 
 1. 完整阅读 [DEPLOY.md](./DEPLOY.md)
-2. 把 `mixin.yaml.example` 中所有 `REPLACE_WITH_*` / `YOUR-*` 改成实际值（订阅 URL、自己生成的代理认证密码）
-3. 把 `docker-compose.override.yml.example` 中 `REPLACE_WITH_PROXY_PASS` 改为同一密码
-4. 按 DEPLOY.md 步骤 1-6 操作
-5. 跑 `bash smoke.sh`，全绿即完成
+2. 装 docker（DEPLOY.md 步骤 1）
+3. 把 `mihomo/config.yaml.example` 中所有 `REPLACE_WITH_*` / `YOUR-*` 改成实际值（订阅 URL、自己生成的代理认证密码）
+4. 把 `docker-compose.override.yml.example` 中 `REPLACE_WITH_PROXY_PASS` 改为同一密码
+5. 拷部署目录到位 → `docker compose up -d`
+6. 跑 `bash smoke.sh`，全绿即完成
 
 ## 关键设计要点
 
 - **AI 流量优先美国，整组失联才 fallback 日本**：基于 mihomo `fallback` proxy-group + 内层 `url-test`，前者负责整组级切换，后者在组内自动选最快节点
-- **两订阅合并**：订阅 1 通过 `clashsub` 管理（决定基础 config），订阅 2 通过 `proxy-providers` 注入（每小时自动刷新）；JP/US 分组同时从两边按 emoji + 关键字 filter 拉节点
-- **sub2api 容器走宿主代理**：`extra_hosts: host.docker.internal:host-gateway` + `HTTP_PROXY` env，注意 mihomo 必须 `allow-lan: true` 并配 `authentication`
+- **订阅作为 proxy-provider 自动刷新**：每小时 mihomo 自动重新拉订阅，新增/失效节点自动同步，不需要 cron / clashsub
+- **mihomo 也容器化，享受 docker 自动重启**：避免 nohup 模式下挂了无人拉起的问题
+- **服务间通过 docker 网络 DNS 通信**：sub2api 用 `mihomo:7890` 而不是 `host.docker.internal:7890`，更稳定
 - **Cloudflare 反 IDC 不影响 sub2api**：`claude.ai` / `chatgpt.com` 网页版被 CF 拦 403 是 IDC IP 黑名单，但 `api.openai.com` / `api.anthropic.com` API 端点对 IDC IP 友好。sub2api 调的是 API 不调网页
 
 详细原理、坑点和故障排查，全在 `DEPLOY.md`。
@@ -61,15 +70,19 @@
 ## 已知坑
 
 1. mihomo `fallback` 不支持延迟阈值，只能整组失联触发切换
-2. mixin 同 key 出现两次会被空值覆盖（YAML 行为），改 mixin 用 `edit` 不要 `write` 整体重写
-3. `allow-lan: true` 务必同时配 `authentication`，否则 7890 暴露公网无密码
-4. install.sh 末尾 `exec $SHELL` 在脚本中会挂住，包一层 `timeout 180 bash install.sh`
-5. 订阅自带的"流量信息节点"会污染 url-test，需要用 filter 排除
+2. mihomo 改 `config.yaml` 后必须 `docker compose restart mihomo` 才生效（mihomo 不监听文件变化）
+3. `allow-lan: true` 在容器内是必需的，配合 `authentication` 仍然安全（端口不暴露宿主）
+4. busybox wget 即使设了 `NO_PROXY=localhost` 也会走代理 → docker healthcheck 会假阴性报 unhealthy。需要在 healthcheck 里加 `-Y off` 强制不走代理
+5. 订阅"信息节点"会污染 url-test，要用 `exclude-filter` 排除"流量"、"过期"等关键字
+
+## 版本历史
+
+- **v2 (current)**: 全容器化部署，mihomo 改为 docker 服务（[本文档](./DEPLOY.md)）
+- **v1 (deprecated)**: 宿主装 mihomo + nohup，sub2api 通过 host.docker.internal 走代理（仅保留 `mixin.yaml.example` 作参考）
 
 ## 相关项目
 
 - [mihomo](https://github.com/MetaCubeX/mihomo) — clash 内核
-- [clash-for-linux-install](https://github.com/nelvko/clash-for-linux-install) — 一键 mihomo 安装脚本
 - [sub2api](https://github.com/Wei-Shaw/sub2api) — Plus/Max 账号转 API 网关
 
 ## 许可

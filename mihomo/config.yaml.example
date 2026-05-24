@@ -1,0 +1,124 @@
+# =============================================================================
+# mihomo 容器配置 - 单订阅（smjc）proxy-provider 模式
+# =============================================================================
+
+mixed-port: 7890
+external-controller: 0.0.0.0:9090
+external-ui: ui
+external-ui-url: https://github.com/Zephyruso/zashboard/releases/latest/download/dist.zip
+
+# compose 内部网络监听，端口不暴露宿主；auth 仍开启作为容器间访问凭证
+allow-lan: true
+bind-address: '*'
+authentication:
+  - "sub2api:REPLACE_WITH_PROXY_PASS"
+
+mode: rule
+log-level: info
+unified-delay: true
+tcp-concurrent: true
+
+dns:
+  enable: true
+  listen: 0.0.0.0:1053
+  enhanced-mode: redir-host
+  default-nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
+  proxy-server-nameserver:
+    - 1.1.1.1
+    - 8.8.8.8
+    - 223.5.5.5
+  nameserver:
+    - 8.8.8.8
+    - 1.1.1.1
+    - 223.5.5.5
+
+# =============================================================================
+# 订阅作为节点池（每小时自动刷新）
+# =============================================================================
+proxy-providers:
+  smjc:
+    type: http
+    url: "https://YOUR-SUBSCRIPTION-PROVIDER/api/v1/client/subscribe?token=YOUR-TOKEN"
+    path: ./providers/smjc.yaml
+    interval: 3600
+    header:
+      User-Agent:
+        - "clash-verge/v2.4.0"
+    health-check:
+      enable: true
+      url: https://www.gstatic.com/generate_204
+      interval: 300
+      lazy: true
+    exclude-filter: "(?i)流量|过期|到期|官网|邮件|节点|订阅|重置|套餐|注意|发送|获取|不推荐"
+
+# =============================================================================
+# 分组
+# =============================================================================
+proxy-groups:
+  # 总出口：默认指向"日本节点"，可在面板手动切换
+  - name: 🌐 全局出口
+    type: select
+    proxies:
+      - 🤖 AI 优选
+      - 🇯🇵 日本节点
+      - 🇺🇸 美国节点
+
+  # AI 优选：fallback，美国整体不可用才掉到日本，再不行直连
+  # 注意：mihomo fallback 基于"可达性"，单节点延迟波动由 url-test 在组内自动切换处理
+  - name: 🤖 AI 优选
+    type: fallback
+    url: https://www.gstatic.com/generate_204
+    interval: 60
+    timeout: 5000
+    proxies:
+      - 🇺🇸 美国节点
+      - 🇯🇵 日本节点
+      - DIRECT
+
+  # 日本节点（url-test 自动选最快）
+  - name: 🇯🇵 日本节点
+    type: url-test
+    url: https://www.gstatic.com/generate_204
+    interval: 300
+    tolerance: 50
+    use:
+      - smjc
+    filter: "(?i)日本|jp\\b|japan|tokyo|osaka|🇯🇵"
+
+  # 美国节点（url-test 自动选最快）
+  - name: 🇺🇸 美国节点
+    type: url-test
+    url: https://www.gstatic.com/generate_204
+    interval: 300
+    tolerance: 50
+    use:
+      - smjc
+    filter: "(?i)美国|us\\b|usa|united states|america|los angeles|seattle|san jose|silicon|kansas|堪萨斯|🇺🇸"
+
+# =============================================================================
+# 路由规则
+# =============================================================================
+rules:
+  - DOMAIN,api64.ipify.org,DIRECT
+
+  # AI 服务：API + Web + OAuth 入口都强制走 AI 优选
+  - DOMAIN-SUFFIX,anthropic.com,🤖 AI 优选
+  - DOMAIN-SUFFIX,claude.ai,🤖 AI 优选
+  - DOMAIN-KEYWORD,claude,🤖 AI 优选
+  - DOMAIN-SUFFIX,openai.com,🤖 AI 优选
+  - DOMAIN-SUFFIX,chatgpt.com,🤖 AI 优选
+  - DOMAIN-SUFFIX,oaistatic.com,🤖 AI 优选
+  - DOMAIN-SUFFIX,oaiusercontent.com,🤖 AI 优选
+  - DOMAIN-KEYWORD,openai,🤖 AI 优选
+  - DOMAIN-KEYWORD,chatgpt,🤖 AI 优选
+  - DOMAIN-SUFFIX,auth.openai.com,🤖 AI 优选
+  - DOMAIN-SUFFIX,auth0.openai.com,🤖 AI 优选
+  - DOMAIN-SUFFIX,console.anthropic.com,🤖 AI 优选
+  - DOMAIN-SUFFIX,gemini.google.com,🤖 AI 优选
+  - DOMAIN-SUFFIX,bard.google.com,🤖 AI 优选
+  - DOMAIN-SUFFIX,generativelanguage.googleapis.com,🤖 AI 优选
+
+  # 兜底：其他所有流量走日本
+  - MATCH,🌐 全局出口

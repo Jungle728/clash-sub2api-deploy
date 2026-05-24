@@ -1,21 +1,57 @@
-# 让 sub2api 容器走宿主机的 clash 代理（监听 0.0.0.0:7890）
-# host.docker.internal 通过 extra_hosts 解析到 host-gateway（docker 20.10+）
+# =============================================================================
+# 让 sub2api 通过同 compose 的 mihomo 容器访问外网
+# 全部走 docker 内部网络，不依赖宿主任何代理服务
+# =============================================================================
 services:
-  sub2api:
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    environment:
-      - HTTP_PROXY=http://sub2api:REPLACE_WITH_PROXY_PASS@host.docker.internal:7890
-      - HTTPS_PROXY=http://sub2api:REPLACE_WITH_PROXY_PASS@host.docker.internal:7890
-      - NO_PROXY=localhost,127.0.0.1,postgres,redis,host.docker.internal
-      - http_proxy=http://sub2api:REPLACE_WITH_PROXY_PASS@host.docker.internal:7890
-      - https_proxy=http://sub2api:REPLACE_WITH_PROXY_PASS@host.docker.internal:7890
-      - no_proxy=localhost,127.0.0.1,postgres,redis,host.docker.internal
-      - UPDATE_PROXY_URL=http://sub2api:REPLACE_WITH_PROXY_PASS@host.docker.internal:7890
-    # 覆盖镜像内的 healthcheck：busybox wget 即使设了 NO_PROXY，对 localhost 仍会走 HTTP_PROXY
-    # 导致 healthcheck 经 mihomo 代理后回 502，容器被标记 unhealthy（实际服务正常）。
-    # 用 -Y off 强制 wget 不走代理。
+  # ===========================================================================
+  # mihomo 代理（替代宿主 ~/clashctl 安装）
+  # ===========================================================================
+  mihomo:
+    image: metacubex/mihomo:latest
+    container_name: sub2api-mihomo
+    restart: unless-stopped
+    # cap_add 让 mihomo 进程能调整网络（DNS 监听低端口等场景需要，
+    # 当前配置不开 tun，cap_add 其实可省，但留着以防后续启用 tun）
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - ./mihomo:/root/.config/mihomo
+    # 只在 compose 内部网络监听；不暴露到宿主，避免暴露公网代理
+    # 9090 控制台仅本机调试用，需要时再加端口映射
+    expose:
+      - "7890"
+      - "9090"
+    networks:
+      - sub2api-network
     healthcheck:
+      test: ["CMD", "wget", "-qO-", "--tries=1", "--timeout=3", "http://localhost:9090"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ===========================================================================
+  # sub2api 走 mihomo 容器
+  # ===========================================================================
+  sub2api:
+    environment:
+      # 容器内通过 docker 内部 DNS 访问 mihomo（compose 服务名）
+      - HTTP_PROXY=http://sub2api:REPLACE_WITH_PROXY_PASS@mihomo:7890
+      - HTTPS_PROXY=http://sub2api:REPLACE_WITH_PROXY_PASS@mihomo:7890
+      - NO_PROXY=localhost,127.0.0.1,postgres,redis,mihomo
+      - http_proxy=http://sub2api:REPLACE_WITH_PROXY_PASS@mihomo:7890
+      - https_proxy=http://sub2api:REPLACE_WITH_PROXY_PASS@mihomo:7890
+      - no_proxy=localhost,127.0.0.1,postgres,redis,mihomo
+      - UPDATE_PROXY_URL=http://sub2api:REPLACE_WITH_PROXY_PASS@mihomo:7890
+    depends_on:
+      mihomo:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # busybox wget 即使设了 NO_PROXY=localhost 仍会走代理 → 502。-Y off 强制不走代理
       test: ["CMD", "wget", "-q", "-Y", "off", "-T", "5", "-O", "/dev/null", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
