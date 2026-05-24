@@ -143,6 +143,30 @@ curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/docker-
 
 > **不要**用 `docker-deploy.sh | bash`：它会生成它自己的 `.env`，覆盖我们仓库已有的模板和定制。
 
+### 2.5 测试服务器是否能直连 AI API（路径选择）
+
+不是所有服务器都需要走 mihomo 代理。某些云服务商（部分 Azure / DigitalOcean / Vultr 海外节点）可以直连 OpenAI / Anthropic 的 API 端点。先测一下：
+
+```bash
+cd ~/sub2api-deploy
+bash check-direct.sh
+```
+
+脚本会测试 3 个关键端点：
+
+- `api.openai.com/v1/models` — sub2api 转发上游用
+- `api.anthropic.com/v1/models` — 同上
+- `auth.openai.com/.well-known/openid-configuration` — OpenAI OAuth 流程用
+
+**根据结果选路径**：
+
+| 结果 | 走哪条路 |
+|---|---|
+| ✅ 全绿（关键端点直连可达） | 可选 → [简化部署](#简化部署不装-mihomo) 或继续完整流程 |
+| ❌ 有失败 | 必须走完整流程，继续[步骤 3](#3-生成代理认证密码) |
+
+> 即使全绿可以走简化路径，**完整部署仍然有价值**：可切换节点、隐藏真实 IP、多账号走不同节点降低风控。简化部署适合"自用 + 接受 IP 暴露"。
+
 ### 3. 生成代理认证密码
 
 ```bash
@@ -378,6 +402,58 @@ proxy-groups:
 ```
 
 最后 `docker compose restart mihomo`。
+
+---
+
+## 简化部署（不装 mihomo）
+
+仅当 [check-direct.sh](#25-测试服务器是否能直连-ai-api路径选择) 测试**全绿**时可用。
+
+### 适用场景
+
+- 自用、单/少账号
+- 服务器是境外节点且能直连 OpenAI/Anthropic
+- 接受真实 IP 暴露给上游（不在意被风控的概率提升）
+
+### 部署步骤
+
+```bash
+# 1. 装 docker（步骤 1）
+# 2. clone 仓库 + 下载 sub2api docker-compose（步骤 2）
+git clone https://github.com/Jungle728/clash-sub2api-deploy.git ~/sub2api-deploy
+cd ~/sub2api-deploy
+curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/docker-compose.local.yml \
+  -o docker-compose.yml
+
+# 3. 配 .env（步骤 4，跳过 PROXY_PASS）
+cp .env.example .env
+chmod 600 .env
+for k in POSTGRES_PASSWORD JWT_SECRET TOTP_ENCRYPTION_KEY; do
+  sed -i "s|^${k}=.*|${k}=$(openssl rand -hex 32)|" .env
+done
+sed -i 's/^SERVER_PORT=.*/SERVER_PORT=65432/' .env
+
+# 4. 不创建 docker-compose.override.yml，不创建 mihomo/config.yaml
+#    （这两个文件不存在时，docker compose 直接用官方 yml 起 sub2api+postgres+redis 三个容器）
+
+# 5. 启动
+docker compose up -d
+docker compose logs sub2api 2>&1 | grep -i 'admin password'
+
+# 6. 验证（注意 smoke.sh 不适用，因为它检查 mihomo 容器；用下面的简化版）
+sleep 5
+curl -s -o /dev/null -w "/health %{http_code}\n" http://127.0.0.1:65432/health   # 期望 200
+```
+
+### 后续如果想升级到完整部署
+
+随时可以加上 mihomo——按完整部署流程的步骤 3-6 操作即可，旧数据保留。
+
+### 注意
+
+- **不要** clone 仓库后什么都不删——repo 里的 `mihomo/` 目录和 `docker-compose.override.yml.example` 不会自动生效（需要手动 cp 重命名才会被 compose 加载），所以放着不影响
+- **不要** 在 `.env` 里设 `UPDATE_PROXY_URL`——直连场景下保持空即可
+- **测试** sub2api 真的能用：在 Web UI 添加一个账号、发起 OAuth，OpenAI 授权页能正常打开就 OK
 
 ---
 

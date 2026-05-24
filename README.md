@@ -42,13 +42,14 @@
 | `DEPLOY.md` | **完整部署手册**，从一台空机器到 sub2api 可对外服务的所有步骤 |
 | `mihomo/config.yaml.example` | mihomo 容器的完整配置（路由 / 分组 / fallback / 订阅） |
 | `docker-compose.override.yml.example` | mihomo 服务定义 + sub2api 走代理的 env 注入 |
-| `smoke.sh` | 部署后端到端冒烟测试，5 步全自动验证 |
+| `smoke.sh` | 部署后端到端冒烟测试，4 步全自动验证 |
+| `check-direct.sh` | **部署前**测试服务器能否直连 OpenAI/Anthropic API，决定走完整 / 简化部署 |
 | `.env.example` | sub2api 部署脚本生成的环境变量模板（凭证全部用占位符） |
 | `mixin.yaml.example` | **v1 遗留**：基于宿主 mihomo 安装的 mixin 配置（v2 已不用，仅供参考） |
 
 ## 快速使用
 
-新机器上从零开始，完整流程见 [DEPLOY.md](./DEPLOY.md)，最简版：
+新机器上从零开始，完整流程见 [DEPLOY.md](./DEPLOY.md)。最简版：
 
 ```bash
 # 1. 装 docker（见 DEPLOY.md 步骤 1）
@@ -59,7 +60,13 @@ cd ~/sub2api-deploy
 curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/docker-compose.local.yml \
   -o docker-compose.yml
 
-# 3. 生成代理认证密码 + 配 .env / mihomo / override（详见 DEPLOY.md 步骤 3-6）
+# 3. 测试服务器能不能直连 OpenAI/Anthropic（决定走哪种部署）
+bash check-direct.sh
+# 全绿 → 可选简化部署（跳过 mihomo + 订阅）
+# 失败 → 走完整部署（mihomo + 订阅）
+
+# === 完整部署（推荐）===
+# 4. 生成密码 + 配 .env / mihomo / override
 PROXY_PASS=$(openssl rand -hex 12)
 cp .env.example .env && chmod 600 .env
 for k in POSTGRES_PASSWORD JWT_SECRET TOTP_ENCRYPTION_KEY; do
@@ -71,10 +78,8 @@ cp docker-compose.override.yml.example docker-compose.override.yml
 sed -i "s|REPLACE_WITH_PROXY_PASS|$PROXY_PASS|g" mihomo/config.yaml docker-compose.override.yml
 # 别忘了把 mihomo/config.yaml 里的订阅 URL 占位符也改了
 
-# 4. 启动
+# 5. 启动 + 验证
 docker compose up -d
-
-# 5. 验证 + 找 admin 一次性密码
 bash smoke.sh
 docker compose logs sub2api 2>&1 | grep -i 'admin password'
 ```
