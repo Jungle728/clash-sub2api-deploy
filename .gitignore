@@ -14,9 +14,14 @@ redis_data/
 # clash 实际运行目录（含订阅 / 凭证 / 节点池缓存）
 clashctl/
 providers/
+mihomo/cache.db
+mihomo/providers/
+mihomo/ui/
 
 # 实际生效的（含真实凭证的）配置
 mixin.yaml
+mihomo/config.yaml
+docker-compose.yml
 docker-compose.override.yml
 !mixin.yaml.example
 !docker-compose.override.yml.example
