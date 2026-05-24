@@ -48,14 +48,38 @@
 
 ## 快速使用
 
-新机器上想复刻这套环境：
+新机器上从零开始，完整流程见 [DEPLOY.md](./DEPLOY.md)，最简版：
 
-1. 完整阅读 [DEPLOY.md](./DEPLOY.md)
-2. 装 docker（DEPLOY.md 步骤 1）
-3. 把 `mihomo/config.yaml.example` 中所有 `REPLACE_WITH_*` / `YOUR-*` 改成实际值（订阅 URL、自己生成的代理认证密码）
-4. 把 `docker-compose.override.yml.example` 中 `REPLACE_WITH_PROXY_PASS` 改为同一密码
-5. 拷部署目录到位 → `docker compose up -d`
-6. 跑 `bash smoke.sh`，全绿即完成
+```bash
+# 1. 装 docker（见 DEPLOY.md 步骤 1）
+
+# 2. clone + 下载官方 compose
+git clone https://github.com/Jungle728/clash-sub2api-deploy.git ~/sub2api-deploy
+cd ~/sub2api-deploy
+curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/docker-compose.local.yml \
+  -o docker-compose.yml
+
+# 3. 生成代理认证密码 + 配 .env / mihomo / override（详见 DEPLOY.md 步骤 3-6）
+PROXY_PASS=$(openssl rand -hex 12)
+cp .env.example .env && chmod 600 .env
+for k in POSTGRES_PASSWORD JWT_SECRET TOTP_ENCRYPTION_KEY; do
+  sed -i "s|^${k}=.*|${k}=$(openssl rand -hex 32)|" .env
+done
+
+cp mihomo/config.yaml.example mihomo/config.yaml
+cp docker-compose.override.yml.example docker-compose.override.yml
+sed -i "s|REPLACE_WITH_PROXY_PASS|$PROXY_PASS|g" mihomo/config.yaml docker-compose.override.yml
+# 别忘了把 mihomo/config.yaml 里的订阅 URL 占位符也改了
+
+# 4. 启动
+docker compose up -d
+
+# 5. 验证 + 找 admin 一次性密码
+bash smoke.sh
+docker compose logs sub2api 2>&1 | grep -i 'admin password'
+```
+
+**新机器迁移（保留旧数据）**：从旧机器 `tar` 备份 `~/sub2api-deploy/` 目录传过去，解压后直接 `docker compose up -d` 即可。详见 DEPLOY.md「迁移到新机器」节。
 
 ## 关键设计要点
 

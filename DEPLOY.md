@@ -44,15 +44,18 @@
 
 ---
 
-## 必需信息（迁移时准备）
+## 必需信息（新部署需要准备）
 
-| 项 | 占位符 | 说明 |
+| 项 | 来源 / 占位符 | 说明 |
 |---|---|---|
-| 订阅 URL | `https://YOUR-SUBSCRIPTION-PROVIDER/...` | 机场订阅地址，作为 mihomo proxy-provider |
-| 代理认证密码 | `REPLACE_WITH_PROXY_PASS` | mihomo 7890 的 Basic Auth；新部署用 `openssl rand -hex 12` 生成 |
-| sub2api 镜像 | `weishaw/sub2api:latest` | docker hub 公共镜像 |
-| sub2api 部署脚本 | `https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/docker-deploy.sh` | 自动生成 db / jwt 等密钥 |
-| mihomo 镜像 | `metacubex/mihomo:latest` | docker hub 公共镜像 |
+| 订阅 URL | `https://YOUR-PROVIDER/...` | 机场提供，作为 mihomo proxy-provider；要求支持 clash 格式 |
+| 代理认证密码 | `openssl rand -hex 12` | mihomo 7890 的 Basic Auth |
+| POSTGRES_PASSWORD | `openssl rand -hex 32` | sub2api 数据库密码 |
+| JWT_SECRET | `openssl rand -hex 32` | 用户登录 token 加密；丢了所有用户被踢 |
+| TOTP_ENCRYPTION_KEY | `openssl rand -hex 32` | 用户 2FA 加密；丢了所有 2FA 失效 |
+| sub2api 镜像 | `weishaw/sub2api:latest` | docker hub |
+| mihomo 镜像 | `metacubex/mihomo:latest` | docker hub |
+| sub2api 官方 compose | `https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/docker-compose.local.yml` | 步骤 2 直接 curl 下载，与上游同步 |
 
 ---
 
@@ -77,56 +80,79 @@ sudo usermod -aG docker "$USER"   # 新 shell 生效
 
 验证：`docker --version && docker compose version`。
 
-### 2. 部署 sub2api 基础
+### 2. clone 仓库 + 下载 sub2api docker-compose
 
 ```bash
-mkdir -p ~/sub2api-deploy && cd ~/sub2api-deploy
-curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/docker-deploy.sh | bash
+git clone https://github.com/Jungle728/clash-sub2api-deploy.git ~/sub2api-deploy
+cd ~/sub2api-deploy
+
+# sub2api 官方 docker-compose.yml（不在本仓库，避免和上游不同步）
+curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/docker-compose.local.yml \
+  -o docker-compose.yml
 ```
 
-脚本会下载 `docker-compose.yml`、生成 `.env`（含随机的 POSTGRES_PASSWORD / JWT_SECRET / TOTP_ENCRYPTION_KEY）、创建数据目录。**记下脚本输出的三个密钥**（也保存在 `.env` chmod 600）。
+> **不要**用 `docker-deploy.sh | bash`：它会生成它自己的 `.env`，覆盖我们仓库已有的模板和定制。
 
-### 3. 写 mihomo 配置
-
-```bash
-mkdir -p ~/sub2api-deploy/mihomo
-# 把 mihomo/config.yaml.example 改实际值后保存为 mihomo/config.yaml
-# 见附录 A
-```
-
-**关键替换**：
+### 3. 生成代理认证密码
 
 ```bash
-# 生成代理认证密码
 PROXY_PASS=$(openssl rand -hex 12)
-echo "PROXY_PASS=$PROXY_PASS"   # 保存好，稍后 docker-compose.override.yml 也要用
+echo "PROXY_PASS=$PROXY_PASS"   # 保存好，下面三个文件都要用
 ```
 
-把 `mihomo/config.yaml` 中两处替换：
-- `REPLACE_WITH_PROXY_PASS` → 你刚生成的 `$PROXY_PASS`
-- `https://YOUR-SUBSCRIPTION-PROVIDER/...` → 你的实际订阅 URL
-
-### 4. 写 docker-compose.override.yml
-
-把附录 B 内容写到 `~/sub2api-deploy/docker-compose.override.yml`，并把 `REPLACE_WITH_PROXY_PASS` 替换成同一个 `$PROXY_PASS`。
-
-> **关键点**：`mihomo/config.yaml` 的 `authentication` 字段密码必须和 `docker-compose.override.yml` 的 `HTTP_PROXY` URL 中的密码**一字不差**。
-
-### 5. （可选）改对外端口
-
-默认 `8080` 是常见 Web 端口，扫描器最爱光顾。建议换成 `49152-65535` 范围的高位端口：
-
-```bash
-sed -i 's/^SERVER_PORT=.*/SERVER_PORT=65432/' ~/sub2api-deploy/.env
-```
-
-### 6. 启动
+### 4. 配置 .env
 
 ```bash
 cd ~/sub2api-deploy
-docker compose pull          # 拉所有镜像
-docker compose up -d         # 启动 mihomo + sub2api + postgres + redis
-docker compose ps             # 应该看到 4 个容器都 healthy
+cp .env.example .env
+chmod 600 .env
+
+# 自动生成 postgres / jwt / totp 三个密钥
+for k in POSTGRES_PASSWORD JWT_SECRET TOTP_ENCRYPTION_KEY; do
+  val=$(openssl rand -hex 32)
+  sed -i "s|^${k}=.*|${k}=${val}|" .env
+done
+
+# 改对外端口为高位端口（推荐，避免扫描器；缺省 8080）
+sed -i 's/^SERVER_PORT=.*/SERVER_PORT=65432/' .env
+
+# 校验：所有 REPLACE_WITH 占位符都被替换
+grep REPLACE_WITH .env && echo "❌ 还有占位符未替换" || echo "✅ .env 配置完成"
+```
+
+### 5. 配置 mihomo/config.yaml
+
+```bash
+cp mihomo/config.yaml.example mihomo/config.yaml
+
+# 把 PROXY_PASS 替换进 authentication
+sed -i "s|REPLACE_WITH_PROXY_PASS|$PROXY_PASS|g" mihomo/config.yaml
+
+# 替换订阅 URL（用你的实际订阅链接）
+SUB_URL='https://YOUR-PROVIDER/api/v1/client/subscribe?token=YOUR-TOKEN'   # 改这一行
+sed -i "s|https://YOUR-SUBSCRIPTION-PROVIDER/api/v1/client/subscribe?token=YOUR-TOKEN|$SUB_URL|g" mihomo/config.yaml
+
+grep -E '^  - "sub2api:|url:' mihomo/config.yaml | head -3   # 校验
+```
+
+### 6. 配置 docker-compose.override.yml
+
+```bash
+cp docker-compose.override.yml.example docker-compose.override.yml
+sed -i "s|REPLACE_WITH_PROXY_PASS|$PROXY_PASS|g" docker-compose.override.yml
+
+grep REPLACE_WITH docker-compose.override.yml && echo "❌ 还有占位符" || echo "✅"
+```
+
+> **重要**：`mihomo/config.yaml` 的 `authentication` 密码必须和 `docker-compose.override.yml` 的 `HTTP_PROXY` URL 密码**完全一致**——都用同一个 `$PROXY_PASS`。
+
+### 7. 启动
+
+```bash
+cd ~/sub2api-deploy
+docker compose pull          # 拉 4 个镜像
+docker compose up -d         # 启动
+docker compose ps            # 应看到 4 个容器都 healthy
 docker compose logs sub2api 2>&1 | grep -i 'admin password'
 ```
 
@@ -138,16 +164,19 @@ Generated admin password (one-time): xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 **这个密码只显示一次，立即保存**。账号 `admin@sub2api.local`。
 
-### 7. 验证链路
+如果想自定义初始密码（避免一次性密码丢失），启动前在 `.env` 里设 `ADMIN_PASSWORD=你想要的密码` 即可。
+
+### 8. 验证链路
 
 ```bash
+# smoke.sh 自动从 .env 读 SERVER_PORT，并验证全链路
 bash ~/sub2api-deploy/smoke.sh
 ```
 
-应输出 5 项全 OK。或手动测：
+应输出 4 项全 OK。或手动测：
 
 ```bash
-# 容器内出口 IP（应该是订阅节点的国外 IP）
+# 容器内出口 IP（应该是订阅节点的国外 IP，不是宿主公网 IP）
 docker exec sub2api curl -s https://api.ipify.org
 
 # AI API 端点可达
@@ -314,10 +343,12 @@ proxy-groups:
 
 ### sub2api OAuth 报"未设置代理"
 
-sub2api 调上游 OAuth 不复用容器的 `HTTP_PROXY` env，每个账号必须**显式绑 proxy 记录**。在 Web UI：
+新版本 sub2api 会自动回退到容器 `HTTP_PROXY` env，**通常不会再报这个错**。如果还报：
 
-1. 代理管理 / Proxies → 新建：host=`mihomo`, port=`7890`, username=`sub2api`, password=`<你的 PROXY_PASS>`
-2. 账号管理 → 编辑账号 → proxy 字段选刚才创建的代理
+1. **检查 mihomo 容器是否健康**：`docker compose ps`，应该是 healthy。挂了就 `docker compose up -d mihomo`
+2. **确认容器 HTTP_PROXY env 在**：`docker exec sub2api env | grep -i http.*proxy`
+3. **手动测代理**：`docker exec sub2api curl -s --max-time 5 https://api.ipify.org`，应返回订阅节点 IP（不是宿主 IP）
+4. **如果上面都对，仍报错**：可能是旧版本 sub2api，去 Web UI **代理 / Proxies** 新建一条，host=`mihomo`、port=`7890`、protocol=`http`、username=`sub2api`、password=`<PROXY_PASS>`，然后编辑账号把 proxy 字段绑上
 
 ### mihomo 启动报错
 
@@ -410,24 +441,68 @@ docker compose up -d sub2api
 
 ## 迁移到新机器
 
-### 备份
+### 场景 A：完全重建（不要旧数据，零开始）
+
+直接在新机器走完[部署步骤](#部署步骤)的 1-8。新建 admin 账号、新订阅、新数据库。
+
+### 场景 B：保留旧数据迁移
 
 ```bash
+# === 旧机器：备份 ===
 cd ~
 docker compose -f sub2api-deploy/docker-compose.yml down
-tar czf clash-sub2api-backup.tar.gz sub2api-deploy/
-```
+sudo tar czf clash-sub2api-backup.tar.gz sub2api-deploy/   # sudo 必需，因为 postgres_data 权限敏感
+ls -la clash-sub2api-backup.tar.gz   # ~80MB（取决于 usage_logs 量）
+# 用 scp / rsync 传到新机器
+scp clash-sub2api-backup.tar.gz user@new-server:~/
 
-`sub2api-deploy/` 已经包含所有需要的：mihomo 配置、所有 db 数据、所有凭证、override 文件。
+# === 新机器 ===
+# 1. 装 docker（步骤 1）
+# 2. 解压备份
+sudo tar xzf clash-sub2api-backup.tar.gz -C ~/
+sudo chown -R $USER:$USER ~/sub2api-deploy
+# postgres_data 内部文件权限保持原样（cp -a / tar 都会保留），不要 chown
 
-### 还原
-
-```bash
-# 在新机器上：装 docker（步骤 1），然后
-tar xzf clash-sub2api-backup.tar.gz -C ~/
+# 3. 启动
 cd ~/sub2api-deploy
 docker compose up -d
-bash smoke.sh   # 5/5 全绿即完成
+bash smoke.sh
+```
+
+`sub2api-deploy/` 已经包含所有需要的：mihomo 配置、postgres/redis/sub2api 数据、凭证、override 文件。无需任何配置改动，**所有账号、API key、usage_logs、admin 密码全部保留**。
+
+> 如果迁移后端口冲突（比如旧机器 65432 是空闲的，新机器被占了），改 `.env` 里 `SERVER_PORT` 即可。
+
+### 场景 C：从 GitHub clone 重建 + 仅恢复数据
+
+适合只想保留 sub2api 业务数据（账号、API key、用量），但其他配置全部从仓库模板重生成：
+
+```bash
+# === 旧机器：仅备份关键文件 ===
+cd ~
+sudo tar czf data-only-backup.tar.gz \
+  sub2api-deploy/.env \
+  sub2api-deploy/data \
+  sub2api-deploy/postgres_data \
+  sub2api-deploy/redis_data
+
+# === 新机器 ===
+# 1. 装 docker
+# 2. clone 仓库 + 走配置步骤 2-6（生成新的 mihomo 配置 / override / 端口等）
+git clone https://github.com/Jungle728/clash-sub2api-deploy.git ~/sub2api-deploy
+cd ~/sub2api-deploy
+curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/docker-compose.local.yml \
+  -o docker-compose.yml
+
+# 3. 解压数据（覆盖 .env 和 data 目录）
+sudo tar xzf data-only-backup.tar.gz --strip-components=1 -C ~/sub2api-deploy/
+
+# 4. 配置 mihomo + override（步骤 5-6，PROXY_PASS 用 .env 里旧的同一个，确保和数据库里 proxies 表一致）
+# ... (按步骤 5-6 操作)
+
+# 5. 启动
+docker compose up -d
+bash smoke.sh
 ```
 
 ---
@@ -439,8 +514,9 @@ bash smoke.sh   # 5/5 全绿即完成
 3. **`allow-lan: true` 在容器内是必需的**：mihomo 默认只监听 127.0.0.1，sub2api 容器会连不到。配合 `authentication` 仍然安全（端口不暴露宿主）
 4. **busybox wget 即使设了 NO_PROXY=localhost 也会走代理**：导致 docker healthcheck 假阴性。`-Y off` 修复
 5. **订阅"信息节点"会污染 url-test**：用 `exclude-filter` 排除"流量"、"过期"、"套餐"等关键字
-6. **sub2api 账号必须绑 proxy_id**：sub2api 不复用容器 HTTP_PROXY，每个账号要在 Web UI 显式选代理
+6. **sub2api 的代理优先级**：`accounts.proxy_id`（数据库里账号绑定的代理）> 容器 `HTTP_PROXY` env > 直连。早期版本（<= 2026-05-22）OAuth 路径必须绑 proxy_id 否则报"未设置代理"；新版本（>= 2026-05-23）回退到 env，所以**只要容器 env 配好了，账号不绑也能用**。仍推荐显式绑账号 proxy 做双保险
 7. **mihomo 第一次拉订阅是直连**：不走自己的 7890。如果服务器在 GFW 后面、订阅 URL 又被墙，mihomo 起不来。要么用 ip 直连的订阅 URL，要么暂时走代理拉一次再切回直连
+8. **postgres_data 权限敏感**：tar 备份必须用 `sudo` 否则会丢权限信息。`docker cp -a` / `tar -p` 会保留 uid（即使宿主 uid 和容器内 70 不一致也无所谓——postgres entrypoint 会自动适配）。**不要**手动 `chown` 整个 postgres_data 目录
 
 ---
 
@@ -649,5 +725,11 @@ echo "✅ 部署正常"
 
 ## 修订历史
 
+- **2026-05-24 v2.1**: 重走全部署流程后调整文档：
+  - 部署步骤改为"git clone 仓库 → curl 下载 sub2api docker-compose → 从 .env.example 生成 .env"，不再依赖 `docker-deploy.sh`（避免覆盖仓库模板）
+  - 新增 .env 自动生成 3 个密钥的命令
+  - "迁移到新机器"拆分为 A/B/C 三种场景（全新 / 完整迁移 / 仅迁数据）
+  - 修正"已知坑 #6"（sub2api 账号 proxy_id 旧版本必填，新版本可省）
+  - "OAuth 报未设置代理"故障排查更新为以容器 env 为主、Web UI 绑定为次
 - **2026-05-24 v2**: 全容器化部署。mihomo 容器化（替代宿主 nohup），订阅以 proxy-provider 自动刷新（替代 clashsub），sub2api 容器通过 docker 网络服务名找代理（替代 host.docker.internal）
 - **2026-05-21 v1**: 初版。clash 装宿主 + nohup，sub2api 通过 host.docker.internal 走代理。已废弃但配置仍保留在仓库 `mixin.yaml.example`
