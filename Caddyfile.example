@@ -1,0 +1,4 @@
+YOUR-API-DOMAIN.example.com {
+    encode zstd gzip
+    reverse_proxy sub2api:8080
+}

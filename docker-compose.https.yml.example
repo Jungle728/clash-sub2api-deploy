@@ -1,0 +1,29 @@
+# Optional HTTPS reverse proxy for sub2api.
+# Usage:
+#   1. cp Caddyfile.example Caddyfile
+#   2. replace YOUR-API-DOMAIN.example.com in Caddyfile
+#   3. set BIND_HOST=127.0.0.1 in .env
+#   4. docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.https.yml up -d
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: sub2api-caddy
+    restart: unless-stopped
+    mem_limit: 128m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy_data:/data
+      - ./caddy_config:/config
+    networks:
+      - sub2api-network
+    depends_on:
+      sub2api:
+        condition: service_healthy

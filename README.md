@@ -42,6 +42,8 @@
 | `DEPLOY.md` | **完整部署手册**，从一台空机器到 sub2api 可对外服务的所有步骤 |
 | `mihomo/config.yaml.example` | mihomo 容器的完整配置（路由 / 分组 / fallback / 订阅） |
 | `docker-compose.override.yml.example` | mihomo 服务定义 + sub2api 走代理的 env 注入 |
+| `docker-compose.https.yml.example` | **可选**：Caddy HTTPS 反向代理，把域名流量转发到 sub2api |
+| `Caddyfile.example` | **可选**：Caddy 域名反代配置模板 |
 | `smoke.sh` | 部署后端到端冒烟测试，4 步全自动验证 |
 | `check-direct.sh` | **部署前**测试服务器能否直连 OpenAI/Anthropic API，决定走完整 / 简化部署 |
 | `.env.example` | sub2api 部署脚本生成的环境变量模板（凭证全部用占位符） |
@@ -84,6 +86,8 @@ docker compose up -d
 bash smoke.sh
 docker compose logs sub2api 2>&1 | grep -i 'admin password'
 ```
+
+可选启用 HTTPS：准备 `api.example.com` 之类的子域名并把 DNS 指向服务器，放行 `80/443` 后，按 [DEPLOY.md「可选：用域名启用 HTTPS」](./DEPLOY.md#可选用域名启用-https) 配置 Caddy 反向代理。启用后公网访问 `https://api.example.com`，明文 `65432` 可收紧到本机监听。
 
 **新机器迁移（保留旧数据）**：从旧机器 `tar` 备份 `~/sub2api-deploy/` 目录传过去，解压后直接 `docker compose up -d` 即可。详见 DEPLOY.md「迁移到新机器」节。
 

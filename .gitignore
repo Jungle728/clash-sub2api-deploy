@@ -40,3 +40,11 @@ logs/
 
 # 临时
 /tmp/
+
+# Caddy HTTPS runtime config / certificates
+Caddyfile
+caddy_data/
+caddy_config/
+docker-compose.https.yml
+!Caddyfile.example
+!docker-compose.https.yml.example

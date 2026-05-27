@@ -405,6 +405,77 @@ proxy-groups:
 
 ---
 
+
+## 可选：用域名启用 HTTPS
+
+如果要把 sub2api 暴露给公网客户端，推荐用 Caddy 做 HTTPS 反向代理，而不是直接公开明文 `http://IP:65432`。
+
+### 前提
+
+- 一个子域名，例如 `api.example.com`
+- DNS `A` 记录已经指向 sub2api 服务器公网 IP
+- 云厂商安全组 / 服务器防火墙放行入站 `TCP 80` 和 `TCP 443`
+- `80` / `443` 没有被其他进程占用：
+
+```bash
+ss -tunlp | grep -E ':(80|443)\b' || echo '80/443 空闲'
+```
+
+### 配置 Caddy
+
+```bash
+cd ~/sub2api-deploy
+
+# 1. 准备 HTTPS compose 覆盖文件
+cp docker-compose.https.yml.example docker-compose.https.yml
+
+# 2. 准备 Caddyfile，并替换为自己的域名
+cp Caddyfile.example Caddyfile
+sed -i 's/YOUR-API-DOMAIN.example.com/api.example.com/g' Caddyfile
+
+# 3. 收紧 sub2api 明文端口，只允许本机访问
+#    Caddy 在 docker 网络内访问 sub2api:8080，不依赖宿主 65432。
+grep -q '^BIND_HOST=' .env \
+  && sed -i 's/^BIND_HOST=.*/BIND_HOST=127.0.0.1/' .env \
+  || echo 'BIND_HOST=127.0.0.1' >> .env
+
+# 4. 启动 HTTPS 反代
+#    注意：docker compose 默认只自动读取 docker-compose.yml + docker-compose.override.yml，
+#    额外的 HTTPS 文件需要显式用 -f 带上。
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.override.yml \
+  -f docker-compose.https.yml \
+  up -d
+```
+
+证书由 Caddy 自动申请和续期，证书与账号数据保存在 `caddy_data/`、`caddy_config/`。这些目录是运行态数据，不应提交到 Git。
+
+### 验证
+
+```bash
+# sub2api 明文端口只监听本机
+ss -tunlp | grep 65432
+# 期望类似：127.0.0.1:65432
+
+# HTTPS 健康检查
+curl -sS -D - https://api.example.com/health -o /tmp/sub2api-health.out
+# 期望：HTTP/2 200
+
+# 原完整链路仍应通过
+bash smoke.sh
+```
+
+如果 Caddy 日志里出现 `Timeout during connect (likely firewall problem)`，通常是 DNS 未指向本机，或云安全组没有放行 `80` / `443`：
+
+```bash
+getent hosts api.example.com
+curl -s https://api.ipify.org
+docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.https.yml logs --tail=120 caddy
+```
+
+---
+
 ## 简化部署（不装 mihomo）
 
 仅当 [check-direct.sh](#25-测试服务器是否能直连-ai-api路径选择) 测试**全绿**时可用。
@@ -851,6 +922,7 @@ echo "✅ 部署正常"
 
 ## 修订历史
 
+- **2026-05-27 v2.2**: 新增可选 HTTPS 部署方式：`docker-compose.https.yml.example` + `Caddyfile.example`，支持用 Caddy 自动申请证书并反向代理到 sub2api，同时建议把明文 `65432` 收紧到本机监听。
 - **2026-05-24 v2.1**: 重走全部署流程后调整文档：
   - 部署步骤改为"git clone 仓库 → curl 下载 sub2api docker-compose → 从 .env.example 生成 .env"，不再依赖 `docker-deploy.sh`（避免覆盖仓库模板）
   - 新增 .env 自动生成 3 个密钥的命令
