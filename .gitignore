@@ -48,3 +48,6 @@ caddy_config/
 docker-compose.https.yml
 !Caddyfile.example
 !docker-compose.https.yml.example
+
+# 自动更新数据库备份
+backups/

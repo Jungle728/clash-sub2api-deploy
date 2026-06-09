@@ -46,6 +46,7 @@
 | `Caddyfile.example` | **可选**：Caddy 域名反代配置模板 |
 | `smoke.sh` | 部署后端到端冒烟测试，4 步全自动验证 |
 | `check-direct.sh` | **部署前**测试服务器能否直连 OpenAI/Anthropic API，决定走完整 / 简化部署 |
+| `scripts/update-sub2api.sh` | 每日自动拉取 sub2api 最新镜像、备份数据库、重建 sub2api 并健康检查 |
 | `.env.example` | sub2api 部署脚本生成的环境变量模板（凭证全部用占位符） |
 | `mixin.yaml.example` | **v1 遗留**：基于宿主 mihomo 安装的 mixin 配置（v2 已不用，仅供参考） |
 | `ai-tools/` | 客户端侧工具：探测 sub2api 网关协议并生成 codex / Claude Code / opencode 配置（详见 [`ai-tools/README.md`](./ai-tools/README.md)） |
@@ -85,6 +86,12 @@ sed -i "s|REPLACE_WITH_PROXY_PASS|$PROXY_PASS|g" mihomo/config.yaml docker-compo
 docker compose up -d
 bash smoke.sh
 docker compose logs sub2api 2>&1 | grep -i 'admin password'
+```
+
+可选启用每日 00:00 自动更新 sub2api：
+
+```bash
+bash scripts/install-auto-update-cron.sh
 ```
 
 可选启用 HTTPS：准备 `api.example.com` 之类的子域名并把 DNS 指向服务器，放行 `80/443` 后，按 [DEPLOY.md「可选：用域名启用 HTTPS」](./DEPLOY.md#可选用域名启用-https) 配置 Caddy 反向代理。启用后公网访问 `https://api.example.com`，明文 `65432` 可收紧到本机监听。
