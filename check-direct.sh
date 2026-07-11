@@ -2,7 +2,7 @@
 # =============================================================================
 # 测试服务器是否能直连 OpenAI / Anthropic API
 # =============================================================================
-# 部署 sub2api 前先跑这个：如果全绿，可以跳过 mihomo / 订阅，做简化部署
+# 部署 sub2api 前先跑这个：用于判断哪些账号可以直连，哪些账号应绑定账户代理
 # 用法：bash check-direct.sh
 #
 # 测试什么：
@@ -83,28 +83,16 @@ ip=$(curl -s --max-time $T https://api.ipify.org 2>/dev/null)
 echo
 echo "========================================"
 if [ "$KEY_FAIL" = "0" ]; then
-    echo -e "\033[32m✅ 关键 API 直连全部可达\033[0m"
+    echo -e "\033[32m关键 API 直连全部可达\033[0m"
     echo
-    echo "你可以选择两种部署："
-    echo
-    echo "  【简化部署】不装 mihomo + 订阅"
-    echo "    优点：少一个容器，少一个订阅成本，配置更简单"
-    echo "    风险：服务器 IP 直接暴露给 OpenAI/Anthropic，"
-    echo "          - IP 进黑名单后无可切换"
-    echo "          - 多账号共用一个 IP 容易触发上游风控"
-    echo "    适合：自用、单/少账号、能接受 IP 直接暴露"
-    echo
-    echo "  【完整部署】装 mihomo + 订阅（DEPLOY.md 默认流程）"
-    echo "    优点：可切换节点、隔离真实服务器 IP、多账号可走不同节点"
-    echo "    成本：多一个 mihomo 容器（~50MB 内存），需要订阅"
-    echo "    适合：长期使用、多账号、对稳定性要求高"
-    echo
-    echo "  选择简化部署：跳过 DEPLOY.md 步骤 5-6，docker-compose.override.yml 留空即可"
-    echo "  详见 DEPLOY.md '简化部署' 章节"
+    echo "允许直连的账号可以不绑定代理。"
+    echo "OAuth / 多账号场景仍建议使用 sub2api 账户级 HTTPS/SOCKS5 代理，"
+    echo "避免所有账号共享并暴露宿主机公网 IP。"
     exit 0
 else
-    echo -e "\033[31m❌ 有 $KEY_FAIL/3 个关键端点不可直达\033[0m"
+    echo -e "\033[31m有 $KEY_FAIL/3 个关键端点不可直达\033[0m"
     echo
-    echo "必须走代理，按 DEPLOY.md 完整流程部署 mihomo + sub2api"
+    echo "受影响的账号必须在 sub2api 中绑定可用的标准 HTTP/HTTPS/SOCKS5 代理。"
+    echo "不要依赖容器级 HTTP_PROXY，也不要在代理失败后回退直连。"
     exit 1
 fi

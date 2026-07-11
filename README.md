@@ -1,144 +1,151 @@
-# clash-sub2api-deploy
+# sub2api account-proxy deploy
 
-在一台 Linux 服务器上用 **mihomo (clash)** 提供出海代理，再用 **sub2api** 把自己的 ChatGPT Plus / Claude Max 账号转成统一 OpenAI / Anthropic 兼容的 API 接口。仓库还附带 [`ai-tools/`](./ai-tools/) 客户端配置生成器，可一键把网关接到 codex CLI / Claude Code / opencode。
+在 Linux 服务器上用 Docker Compose 运行 [sub2api](https://github.com/Wei-Shaw/sub2api)，通过 **sub2api 账户级代理**为不同上游账号选择独立的 HTTP、HTTPS 或 SOCKS5 出口。公网入口由 Caddy 提供 HTTPS，仓库不再为 sub2api 注入容器级全局代理，也不依赖 mihomo。
 
-适合场景：
+适合以下场景：
 
-- 自己有 ChatGPT Plus / Claude Pro/Max 账号，想用编程 SDK / Cline / Cursor 等以 API 方式调用
-- 服务器在境内或在被 OpenAI/Anthropic 拒绝的 IDC 区域，需要先经过代理出海
-- AI 流量优先走美国节点，自动 fallback 日本，节点不可达时切换无感
+- 将自己的 ChatGPT Plus、Claude Pro/Max 等账号转换为 OpenAI / Anthropic 兼容 API
+- OAuth 账号需要固定海外出口，但部分其他平台 API 允许服务器直连
+- 希望在 sub2api 后台按账号设置代理，并在代理失败时阻止静默直连
+- 需要把网关接入 Codex CLI、Claude Code 或 opencode
 
-## 架构（v2 全容器化）
+## 架构
 
+```text
+Codex / Claude Code / SDK
+        |
+        | HTTPS :443
+        v
+      Caddy                         远端标准代理
+  (TLS 证书与续期)                 (HTTPS / SOCKS5)
+        |                                |
+        | Docker 私网 HTTP               | TLS / CONNECT
+        v                                v
+   sub2api:8080 -- 按账号 proxy_id --> OpenAI / Anthropic
+        |
+        +--> PostgreSQL
+        +--> Redis
+        |
+        +--> 未绑定代理的指定账号可按策略直连
 ```
-┌─────────────────────────────────────────────────┐
-│ 宿主机                                          │
-│   ✗ 不装 mihomo / clashctl                      │
-│   ✗ 不依赖 systemd / nohup                      │
-│                                                 │
-│  ┌──────────── docker compose ───────────────┐ │
-│  │                                            │ │
-│  │ sub2api-mihomo  ←─┐                        │ │
-│  │   (mihomo:latest) │                        │ │
-│  │   :7890 (内部)    │ HTTP_PROXY            │ │
-│  │   :9090 (内部)    │ mihomo:7890          │ │
-│  │                   │                        │ │
-│  │ sub2api ──────────┘                        │ │
-│  │   :8080 → 宿主 :65432 (可改)               │ │
-│  │   ↓                                        │ │
-│  │ sub2api-postgres                           │ │
-│  │ sub2api-redis                              │ │
-│  └────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────┘
-                       ↓
-              proxy-providers (订阅，自动每小时刷新)
-              JP / US 节点 → AI API (OpenAI/Anthropic)
-```
+
+Caddy 只负责公网 HTTPS：客户端的 TLS 连接在 Caddy 结束，随后请求通过同机 Docker 私网转发到 `sub2api:8080`。sub2api 完成鉴权、模型路由和账号调度，再读取所选账号的 `proxy_id`。账户级代理和客户端入口是两条独立链路。
 
 ## 仓库内容
 
-| 文件 | 用途 |
+| 路径 | 用途 |
 |---|---|
-| `DEPLOY.md` | **完整部署手册**，从一台空机器到 sub2api 可对外服务的所有步骤 |
-| `mihomo/config.yaml.example` | mihomo 容器的完整配置（路由 / 分组 / fallback / 订阅） |
-| `docker-compose.override.yml.example` | mihomo 服务定义 + sub2api 走代理的 env 注入 |
-| `docker-compose.https.yml.example` | **可选**：Caddy HTTPS 反向代理，把域名流量转发到 sub2api |
-| `Caddyfile.example` | **可选**：Caddy 域名反代配置模板 |
-| `smoke.sh` | 部署后端到端冒烟测试，4 步全自动验证 |
-| `check-direct.sh` | **部署前**测试服务器能否直连 OpenAI/Anthropic API，决定走完整 / 简化部署 |
-| `scripts/update-sub2api.sh` | 每日自动拉取 sub2api 最新镜像、备份数据库、重建 sub2api 并健康检查 |
-| `.env.example` | sub2api 部署脚本生成的环境变量模板（凭证全部用占位符） |
-| `mixin.yaml.example` | **v1 遗留**：基于宿主 mihomo 安装的 mixin 配置（v2 已不用，仅供参考） |
-| `ai-tools/` | 客户端侧工具：探测 sub2api 网关协议并生成 codex / Claude Code / opencode 配置（详见 [`ai-tools/README.md`](./ai-tools/README.md)） |
+| `DEPLOY.md` | 从空服务器到可用网关的完整部署和迁移手册 |
+| `.env.example` | sub2api、PostgreSQL 和服务端口变量模板 |
+| `docker-compose.override.yml.example` | 低内存参数和 sub2api WebSocket 会话设置 |
+| `docker-compose.https.yml.example` | Caddy HTTPS 反向代理服务 |
+| `Caddyfile.example` | 公网 API 域名反代模板 |
+| `check-direct.sh` | 检查宿主机直连上游的能力和风险 |
+| `smoke.sh` | 检查容器、入口健康、全局代理残留及账户代理配置 |
+| `scripts/update-sub2api.sh` | 检查镜像更新；有新镜像时备份数据库并重建 sub2api |
+| `scripts/install-auto-update-cron.sh` | 安装每小时更新检查任务 |
+| `ai-tools/` | 生成 Codex、Claude Code 和 opencode 客户端配置 |
 
-## 快速使用
+## 快速开始
 
-新机器上从零开始，完整流程见 [DEPLOY.md](./DEPLOY.md)。最简版：
+完整说明见 [DEPLOY.md](./DEPLOY.md)。下面是最短路径：
 
 ```bash
-# 1. 装 docker（见 DEPLOY.md 步骤 1）
-
-# 2. clone + 下载官方 compose
 git clone https://github.com/Jungle728/clash-sub2api-deploy.git ~/sub2api-deploy
 cd ~/sub2api-deploy
+
+# 使用 sub2api 官方 local compose，避免仓库副本落后上游
 curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/docker-compose.local.yml \
   -o docker-compose.yml
 
-# 3. 测试服务器能不能直连 OpenAI/Anthropic（决定走哪种部署）
-bash check-direct.sh
-# 全绿 → 可选简化部署（跳过 mihomo + 订阅）
-# 失败 → 走完整部署（mihomo + 订阅）
-
-# === 完整部署（推荐）===
-# 4. 生成密码 + 配 .env / mihomo / override
-PROXY_PASS=$(openssl rand -hex 12)
-cp .env.example .env && chmod 600 .env
+cp .env.example .env
+chmod 600 .env
 for k in POSTGRES_PASSWORD JWT_SECRET TOTP_ENCRYPTION_KEY; do
   sed -i "s|^${k}=.*|${k}=$(openssl rand -hex 32)|" .env
 done
 
-cp mihomo/config.yaml.example mihomo/config.yaml
 cp docker-compose.override.yml.example docker-compose.override.yml
-sed -i "s|REPLACE_WITH_PROXY_PASS|$PROXY_PASS|g" mihomo/config.yaml docker-compose.override.yml
-# 别忘了把 mihomo/config.yaml 里的订阅 URL 占位符也改了
-
-# 5. 启动 + 验证
+docker compose config
 docker compose up -d
 bash smoke.sh
+```
+
+首启管理员密码可从日志读取：
+
+```bash
 docker compose logs sub2api 2>&1 | grep -i 'admin password'
 ```
 
-可选启用每日 00:00 自动更新 sub2api：
+## 配置账户级代理
+
+sub2api 支持以下标准格式：
+
+```text
+http://USER:PASSWORD@proxy.example.com:8080
+https://USER:PASSWORD@proxy.example.com:443
+socks5://USER:PASSWORD@proxy.example.com:1080
+```
+
+VLESS、VMess、Trojan 或 Reality 分享链接不能直接填入 sub2api。若代理服务器由 3x-ui 管理，应在实际出口节点额外创建带认证的 `HTTP` 或 `Mixed (SOCKS/HTTP)` 入站，并通过云防火墙只允许 sub2api 服务器 IP 访问。
+
+在 sub2api 后台完成以下操作：
+
+1. 添加代理并运行连通性测试。
+2. 将需要隔离出口的 OAuth 账号绑定到该代理。
+3. 对允许直连的账号保持未绑定状态。
+4. 不启用“代理失败后回源直连”，避免意外暴露宿主机 IP。
+
+## 启用 HTTPS
+
+准备域名并将 DNS 指向服务器，然后：
+
+```bash
+cp docker-compose.https.yml.example docker-compose.https.yml
+cp Caddyfile.example Caddyfile
+# 将 Caddyfile 中的 YOUR-API-DOMAIN.example.com 改为真实域名
+# 在 .env 中设置 BIND_HOST=127.0.0.1
+
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.override.yml \
+  -f docker-compose.https.yml \
+  up -d
+```
+
+公网客户端只访问 `https://api.example.com`。宿主机映射端口应绑定 `127.0.0.1`，PostgreSQL、Redis 和 sub2api 的容器端口不直接暴露公网。
+
+## 自动更新
 
 ```bash
 bash scripts/install-auto-update-cron.sh
 ```
 
-可选启用 HTTPS：准备 `api.example.com` 之类的子域名并把 DNS 指向服务器，放行 `80/443` 后，按 [DEPLOY.md「可选：用域名启用 HTTPS」](./DEPLOY.md#可选用域名启用-https) 配置 Caddy 反向代理。启用后公网访问 `https://api.example.com`，明文 `65432` 可收紧到本机监听。
+cron 每小时检查 `weishaw/sub2api:latest`。镜像未变化时不会备份或重建；发现新镜像后，脚本先将 PostgreSQL 备份到 `backups/`，再只重建 sub2api 并检查 `/health`。
 
-**新机器迁移（保留旧数据）**：从旧机器 `tar` 备份 `~/sub2api-deploy/` 目录传过去，解压后直接 `docker compose up -d` 即可。详见 DEPLOY.md「迁移到新机器」节。
-
-## 客户端配置（ai-tools）
-
-部署完 sub2api 后，可以用 `ai-tools/gen_configs.py` 一键探测网关支持的协议（OpenAI Chat / Responses / Anthropic Messages）并生成对应客户端配置：
+## 客户端配置
 
 ```bash
-# 预览到当前目录
-python3 ai-tools/gen_configs.py --base-url http://YOUR-HOST:65432 --api-key sk-xxx
-
-# 写入标准路径（~/.codex、~/.claude、~/.config/opencode）
-python3 ai-tools/gen_configs.py --base-url http://YOUR-HOST:65432 --api-key sk-xxx --install
+python3 ai-tools/gen_configs.py \
+  --base-url https://api.example.com \
+  --api-key REPLACE_WITH_API_KEY \
+  --out-dir /tmp/sub2api-client-preview
 ```
 
-完整选项见 [`ai-tools/README.md`](./ai-tools/README.md)。
+确认预览后再使用 `--install`。完整选项见 [ai-tools/README.md](./ai-tools/README.md)。
 
-## 关键设计要点
+## 安全原则
 
-- **AI 流量优先美国，整组失联才 fallback 日本**：基于 mihomo `fallback` proxy-group + 内层 `url-test`，前者负责整组级切换，后者在组内自动选最快节点
-- **订阅作为 proxy-provider 自动刷新**：每小时 mihomo 自动重新拉订阅，新增/失效节点自动同步，不需要 cron / clashsub
-- **mihomo 也容器化，享受 docker 自动重启**：避免 nohup 模式下挂了无人拉起的问题
-- **服务间通过 docker 网络 DNS 通信**：sub2api 用 `mihomo:7890` 而不是 `host.docker.internal:7890`，更稳定
-- **Cloudflare 反 IDC 不影响 sub2api**：`claude.ai` / `chatgpt.com` 网页版被 CF 拦 403 是 IDC IP 黑名单，但 `api.openai.com` / `api.anthropic.com` API 端点对 IDC IP 友好。sub2api 调的是 API 不调网页
-
-详细原理、坑点和故障排查，全在 `DEPLOY.md`。
-
-## 已知坑
-
-1. mihomo `fallback` 不支持延迟阈值，只能整组失联触发切换
-2. mihomo 改 `config.yaml` 后必须 `docker compose restart mihomo` 才生效（mihomo 不监听文件变化）
-3. `allow-lan: true` 在容器内是必需的，配合 `authentication` 仍然安全（端口不暴露宿主）
-4. busybox wget 即使设了 `NO_PROXY=localhost` 也会走代理 → docker healthcheck 会假阴性报 unhealthy。需要在 healthcheck 里加 `-Y off` 强制不走代理
-5. 订阅"信息节点"会污染 url-test，要用 `exclude-filter` 排除"流量"、"过期"等关键字
-
-## 版本历史
-
-- **v2 (current)**: 全容器化部署，mihomo 改为 docker 服务（[本文档](./DEPLOY.md)）
-- **v1 (deprecated)**: 宿主装 mihomo + nohup，sub2api 通过 host.docker.internal 走代理（仅保留 `mixin.yaml.example` 作参考）
+- 不提交 `.env`、实际 Compose/Caddy 配置、数据库、日志、备份或代理凭据。
+- 账户代理必须使用强认证；公网 SOCKS5 还必须限制来源 IP，优先选择 HTTPS 代理。
+- 已发送到聊天、Issue 或日志的代理链接和 UUID 应立即轮换。
+- 代理测试成功不代表账号已绑定；需要在账号详情中确认 `proxy_id`。
+- “容器 healthy”只说明本地服务正常，真实上游链路应结合业务请求日志验证。
 
 ## 相关项目
 
-- [mihomo](https://github.com/MetaCubeX/mihomo) — clash 内核
-- [sub2api](https://github.com/Wei-Shaw/sub2api) — Plus/Max 账号转 API 网关
+- [sub2api](https://github.com/Wei-Shaw/sub2api)
+- [3x-ui](https://github.com/MHSanaei/3x-ui)
+- [Caddy](https://github.com/caddyserver/caddy)
 
 ## 许可
 

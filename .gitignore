@@ -11,19 +11,15 @@ data/
 postgres_data/
 redis_data/
 
-# clash 实际运行目录（含订阅 / 凭证 / 节点池缓存）
+# 旧代理运行目录（可能包含订阅、节点和认证信息）
 clashctl/
 providers/
-mihomo/cache.db
-mihomo/providers/
-mihomo/ui/
+mihomo/
 
 # 实际生效的（含真实凭证的）配置
 mixin.yaml
-mihomo/config.yaml
 docker-compose.yml
 docker-compose.override.yml
-!mixin.yaml.example
 !docker-compose.override.yml.example
 
 # 编辑器/系统垃圾
@@ -33,6 +29,7 @@ docker-compose.override.yml
 *~
 .idea/
 .vscode/
+.claude/
 
 # 日志
 *.log
@@ -43,6 +40,7 @@ logs/
 
 # Caddy HTTPS runtime config / certificates
 Caddyfile
+Caddyfile.before-*
 caddy_data/
 caddy_config/
 docker-compose.https.yml

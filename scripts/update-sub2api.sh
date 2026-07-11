@@ -40,6 +40,28 @@ HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:${SERVER_PORT}/health}"
 
 log "Starting sub2api update in $COMPOSE_DIR"
 
+before_image="$(docker image inspect weishaw/sub2api:latest --format '{{.Id}}' 2>/dev/null || true)"
+running_image="$(docker inspect --format '{{.Image}}' "$HEALTH_CONTAINER" 2>/dev/null || true)"
+
+log "Pulling latest sub2api image"
+docker compose pull "$SERVICE" 2>&1 | tee -a "$LOG_FILE"
+after_image="$(docker image inspect weishaw/sub2api:latest --format '{{.Id}}' 2>/dev/null || true)"
+[[ -n "$after_image" ]] || fail "Could not determine weishaw/sub2api:latest image id after pull"
+
+if [[ -n "$before_image" && "$before_image" == "$after_image" ]]; then
+  log "Image unchanged: $after_image"
+else
+  log "Image changed: ${before_image:-none} -> ${after_image:-unknown}"
+fi
+
+if [[ -n "$running_image" && "$running_image" == "$after_image" ]]; then
+  log "Running container already uses latest image: $running_image"
+  log "No update needed; skipping backup and service recreate"
+  find "$BACKUP_DIR" -type f -name 'sub2api-db-*.sql.gz' -mtime +"$BACKUP_RETENTION_DAYS" -delete
+  log "sub2api update check completed"
+  exit 0
+fi
+
 if docker ps --format '{{.Names}}' | grep -qx "$POSTGRES_CONTAINER"; then
   backup_file="$BACKUP_DIR/sub2api-db-$(date '+%Y%m%d-%H%M%S').sql.gz"
   log "Backing up PostgreSQL to $backup_file"
@@ -47,17 +69,6 @@ if docker ps --format '{{.Names}}' | grep -qx "$POSTGRES_CONTAINER"; then
     | gzip > "$backup_file"
 else
   log "PostgreSQL container $POSTGRES_CONTAINER is not running; skipping backup"
-fi
-
-before_image="$(docker image inspect weishaw/sub2api:latest --format '{{.Id}}' 2>/dev/null || true)"
-log "Pulling latest sub2api image"
-docker compose pull "$SERVICE" 2>&1 | tee -a "$LOG_FILE"
-after_image="$(docker image inspect weishaw/sub2api:latest --format '{{.Id}}' 2>/dev/null || true)"
-
-if [[ -n "$before_image" && "$before_image" == "$after_image" ]]; then
-  log "Image unchanged: $after_image"
-else
-  log "Image changed: ${before_image:-none} -> ${after_image:-unknown}"
 fi
 
 log "Recreating $SERVICE service"

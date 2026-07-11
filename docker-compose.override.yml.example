@@ -1,59 +1,57 @@
-# =============================================================================
-# 让 sub2api 通过同 compose 的 mihomo 容器访问外网
-# 全部走 docker 内部网络，不依赖宿主任何代理服务
-# =============================================================================
-services:
-  # ===========================================================================
-  # mihomo 代理（替代宿主 ~/clashctl 安装）
-  # ===========================================================================
-  mihomo:
-    image: metacubex/mihomo:latest
-    container_name: sub2api-mihomo
-    restart: unless-stopped
-    # cap_add 让 mihomo 进程能调整网络（DNS 监听低端口等场景需要，
-    # 当前配置不开 tun，cap_add 其实可省，但留着以防后续启用 tun）
-    cap_add:
-      - NET_ADMIN
-    volumes:
-      - ./mihomo:/root/.config/mihomo
-    # 只在 compose 内部网络监听；不暴露到宿主，避免暴露公网代理
-    # 9090 控制台仅本机调试用，需要时再加端口映射
-    expose:
-      - "7890"
-      - "9090"
-    networks:
-      - sub2api-network
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "--tries=1", "--timeout=3", "http://localhost:9090"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
+# Resource limits and operational defaults for a small sub2api host.
+# Account proxies are configured in the sub2api UI/database, not as
+# container-level HTTP_PROXY or HTTPS_PROXY environment variables.
 
-  # ===========================================================================
-  # sub2api 走 mihomo 容器
-  # ===========================================================================
+x-low-memory-logging: &low-memory-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
   sub2api:
+    mem_limit: 384m
+    logging: *low-memory-logging
     environment:
-      # 容器内通过 docker 内部 DNS 访问 mihomo（compose 服务名）
-      - HTTP_PROXY=http://sub2api:REPLACE_WITH_PROXY_PASS@mihomo:7890
-      - HTTPS_PROXY=http://sub2api:REPLACE_WITH_PROXY_PASS@mihomo:7890
-      - NO_PROXY=localhost,127.0.0.1,postgres,redis,mihomo
-      - http_proxy=http://sub2api:REPLACE_WITH_PROXY_PASS@mihomo:7890
-      - https_proxy=http://sub2api:REPLACE_WITH_PROXY_PASS@mihomo:7890
-      - no_proxy=localhost,127.0.0.1,postgres,redis,mihomo
-      - UPDATE_PROXY_URL=http://sub2api:REPLACE_WITH_PROXY_PASS@mihomo:7890
+      - GATEWAY_OPENAI_WS_STICKY_SESSION_TTL_SECONDS=86400
+      - GATEWAY_OPENAI_WS_STICKY_RESPONSE_ID_TTL_SECONDS=86400
     depends_on:
-      mihomo:
-        condition: service_healthy
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    healthcheck:
-      # busybox wget 即使设了 NO_PROXY=localhost 仍会走代理 → 502。-Y off 强制不走代理
-      test: ["CMD", "wget", "-q", "-Y", "off", "-T", "5", "-O", "/dev/null", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
+
+  postgres:
+    mem_limit: 256m
+    logging: *low-memory-logging
+    command:
+      - postgres
+      - -c
+      - max_connections=30
+      - -c
+      - shared_buffers=64MB
+      - -c
+      - work_mem=2MB
+      - -c
+      - maintenance_work_mem=32MB
+      - -c
+      - effective_cache_size=256MB
+      - -c
+      - wal_buffers=4MB
+      - -c
+      - max_wal_size=256MB
+
+  redis:
+    mem_limit: 128m
+    logging: *low-memory-logging
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+    command: >
+      sh -c '
+        redis-server
+        --save 60 1
+        --appendonly yes
+        --appendfsync everysec
+        --maxmemory 96mb
+        --maxmemory-policy allkeys-lru
+        $${REDIS_PASSWORD:+--requirepass "$$REDIS_PASSWORD"}'

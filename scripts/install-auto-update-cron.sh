@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Install a daily 00:00 cron job for scripts/update-sub2api.sh.
+# Install an hourly cron job for scripts/update-sub2api.sh.
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 UPDATE_SCRIPT="$COMPOSE_DIR/scripts/update-sub2api.sh"
 CRON_MARKER="# clash-sub2api-deploy auto update"
-CRON_LINE="0 0 * * * cd $COMPOSE_DIR && $UPDATE_SCRIPT >> $COMPOSE_DIR/logs/sub2api-auto-update.cron.log 2>&1 $CRON_MARKER"
+CRON_LINE="0 * * * * cd $COMPOSE_DIR && $UPDATE_SCRIPT >> $COMPOSE_DIR/logs/sub2api-auto-update.cron.log 2>&1 $CRON_MARKER"
 
 mkdir -p "$COMPOSE_DIR/logs"
 chmod +x "$UPDATE_SCRIPT"

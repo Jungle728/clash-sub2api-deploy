@@ -1,6 +1,6 @@
 # ai-tools
 
-把 [sub2api](https://github.com/) 类网关一键配置到三个主流 AI 编码 CLI:
+把 [sub2api](https://github.com/Wei-Shaw/sub2api) 类网关一键配置到三个主流 AI 编码 CLI:
 
 - [codex CLI](https://github.com/openai/codex)
 - [Claude Code](https://docs.anthropic.com/claude-code)

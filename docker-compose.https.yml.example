@@ -1,4 +1,5 @@
-# Optional HTTPS reverse proxy for sub2api.
+# Optional HTTPS client entry for sub2api.
+# Account-level upstream proxies remain configured in the sub2api UI.
 # Usage:
 #   1. cp Caddyfile.example Caddyfile
 #   2. replace YOUR-API-DOMAIN.example.com in Caddyfile
